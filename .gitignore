@@ -1,0 +1,15 @@
+MyBot
+Makefile
+*.hlt
+*.log
+*~
+*.pyc
+*.pyo
+__pycache__/
+*.class
+*.ipr
+*.iws
+*.exe
+.vscode/
+docs/
+replays/
