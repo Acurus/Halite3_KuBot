@@ -112,7 +112,7 @@ class KuBot():
         move = None
         
         # Check if we should stay put and mine.
-        if self.game_map[ship.position].halite_amount > constants.MAX_HALITE/100:
+        if self.game_map[ship.position].halite_amount > constants.MAX_HALITE/10:
             logging.debug('Mining at:{} with Halite:{}'.format(ship.position, self.game_map[ship.position].halite_amount))
             move = Direction.Still
             self.game_map[ship.position].mark_unsafe(ship)
@@ -121,12 +121,17 @@ class KuBot():
         else:
             for cardinal in ship.position.get_surrounding_cardinals():
                 logging.debug('Cardinal: {} - Halite: {}'.format(cardinal, self.game_map[cardinal].halite_amount))
-                if not self.game_map[cardinal].is_occupied and self.game_map[cardinal].halite_amount > constants.MAX_HALITE/100:
-                    possible_moves.append(self.game_map.naive_navigate(ship, cardinal))
+                if not self.game_map[cardinal].is_occupied and self.game_map[cardinal].halite_amount > constants.MAX_HALITE/10:
+                    possible_moves.append(cardinal)
                     
             # Move towards a random candidate
             if len(possible_moves) > 0:
-                move = random.choice(possible_moves)
+                max_halite = 0
+                for m in possible_moves:
+                    if self.game_map[m].halite_amount > max_halite:
+                        max_halite = self.game_map[m].halite_amount
+                        move = self.game_map.naive_navigate(ship, m)
+                
                 logging.debug('Moving: {}'.format(move))
            
             # If no mineable cell was found, move to a random cell. 
