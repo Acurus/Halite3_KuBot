@@ -27,7 +27,7 @@ class Game:
         logging.basicConfig(
             filename="bot-{}.log".format(self.my_id),
             filemode="w",
-            level=logging.DEBUG,
+            level=logging.INFO,
         )
 
         self.players = {}
