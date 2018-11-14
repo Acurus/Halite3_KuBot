@@ -12,13 +12,15 @@ class KuBot():
     def __init__(self, game):
         logging.info('turns: {}'.format(constants.MAX_TURNS))
         self.game = game
+        self.building_dropoff = False
         logging.info('size: {}x{}'.format(game.game_map.height, game.game_map.width))
-        self.build = {'worker':35,'attacker':1}
-        self.ship_types = {} # what the ships are doing
-        self.waiting = {} # How long a ship has been waiting in one spot
+        logging.info('Shipyard @ {}'.format(game.me.shipyard))
+        self.ship_status = {}
+
+        # Make sure you put variables above the run() function!
         self.run()
         
-    
+        
     def run(self):
         while True:
             # Get fresh values
@@ -26,83 +28,102 @@ class KuBot():
             self.me = game.me
             self.game_map = self.game.game_map
             self.players = self.game.players
+            
             ships = self.me.get_ships()
+            dropoffs = self.me.get_dropoffs()
             turns_left = constants.MAX_TURNS - self.game.turn_number
             command_queue = []
-            longest_distance_to_home = 0
+            logging.info('Number of dropoffs: {}'.format(len(dropoffs)))
+            logging.info('Number of ships: {}'.format(len(ships)))
+            logging.info('Halite amount: {}'.format(self.me.halite_amount))
+            logging.info('Ship status: {}'.format(self.ship_status))
 
-            # Check if we lost any ships last round
+            for ship in ships:
+                if ship.id not in self.ship_status:
+                    self.ship_status[ship.id] = 'mining'
+            
+            # Se if we lost a ship
             ship_ids = [ship.id for ship in ships]
-            for ship in self.ship_types:
-                if ship not in ship_ids:
-                    self.ship_types[ship] = 'dead'
-                    logging.info('****Ship id{} Died****'.format(ship))
-                    #del self.ship_types[ship]
+            for ship_id in self.ship_status:
+                if ship_id not in ship_ids:
+                    logging.info('We have lost {}'.format(ship_id))
+            
+            try:
+                longest_distance_to_dropoff = (0,None)
+                if len(ships) > 1:
+                    for ship in ships:
+                        ship_dist_to_dropoff = self.game_map.calculate_distance(ship.position, self.closest_dropoff(ship, dropoffs))
+                        if ship_dist_to_dropoff > longest_distance_to_dropoff[0]:
+                            longest_distance_to_dropoff = (ship_dist_to_dropoff,ship.id)
+            except:
+                raise
+                logging.debug('No ships')
+            
 
-                try:
-                    longest_distance_to_home = max([self.game_map.calculate_distance(ship.position, self.me.shipyard.position) for ship in ships])
-                except:
-                    logging.debug('No ships')
+
+            # Check if we should build an dropoff
+            if len(ships) > (len(dropoffs)+1)*8 and len(dropoffs) < 3:
+                logging.info('Time to expand! {} ships:{} dropoffs:{} ratio:{}>{}'.
+                             format(self.building_dropoff, len(ships), len(dropoffs),len(ships), (len(dropoffs)+1)*8))
+
+                # Find best ship for expanding
+                self.ship_status[longest_distance_to_dropoff[1]] = 'building_dropoff'
+            
+ 
             # Itterate through each ship and decide what to do
             for ship in ships:
-                logging.debug('\nProcessing ship:{} @ {}'.format(ship.id, ship.position))
+                logging.debug('\nProcessing ship:{} @ {} : {}'.format(ship.id, ship.position, self.ship_status[ship.id]))
 
                 # Check if the ship need to return home
-                if  turns_left < longest_distance_to_home * 1.5:
-                    distance_to_home = self.game_map.calculate_distance(ship.position, self.me.shipyard.position)
-                    logging.debug('distance to home:{} - rounds left: {}'.format(distance_to_home, turns_left))
-                    self.ship_types[ship.id] = 'returning'
-                    if distance_to_home == 1:
-                        command_queue.append(ship.move(self.game_map.get_unsafe_moves(ship.position, self.me.shipyard.position)[0]))
+                if  turns_left < longest_distance_to_dropoff[0] * 1.5:
+                    distance_to_dropoff = self.game_map.calculate_distance(ship.position, self.closest_dropoff(ship, dropoffs))
+                    logging.debug('distance to home:{} - rounds left: {}'.format(distance_to_dropoff, turns_left))
+                    self.ship_status[ship.id] = 'returning'
+                    if distance_to_dropoff == 1:
+                        command_queue.append(ship.move(self.game_map.get_unsafe_moves(ship.position, self.closest_dropoff(ship, dropoffs))[0]))
                     else:
-                        command_queue.append(ship.move(self.game_map.naive_navigate(ship, self.me.shipyard.position)))
+                        command_queue.append(ship.move(self.game_map.naive_navigate(ship, self.closest_dropoff(ship, dropoffs))))
 
                     
-
-                # Add ship to ship_types dictionary if it's not there and assign role.
-                if ship.id not in self.ship_types:
-                    if sum(value == 'worker' for value in self.ship_types.values()) < self.build['worker']:
-                        self.ship_types[ship.id] = 'worker'
+                # Check if we can build the extra dropoff                          
+                if self.ship_status[ship.id] == 'building_dropoff':
+                    if self.me.halite_amount > 4000:
+                        command_queue.append(ship.make_dropoff())
+                        self.building_dropoff == False
+                        logging.info('Ship:{} expanded @ {}'.format(ship.id, ship.position))
                     else:
-                        self.ship_types[ship.id] = 'attacker'
+                        self.ship_status[ship.id] = 'mining'
+                        logging.info('{} could not expand at this time. Returning to mining'.format(ship.id))
 
-                # Check if it should turn in cargo                            
-                if ship.halite_amount > 700 and self.ship_types[ship.id] != 'returning':
-                    command_queue.append(self.return_halite(ship))
+                # Check if it should turn in cargo  
+                if ship.halite_amount > 700 and self.ship_status[ship.id] not in ['returning','building_dropoff']:
+                    command_queue.append(self.return_halite(ship, dropoffs))
                 
-                # Check role and decide next move
-                elif self.ship_types[ship.id] == 'worker':
+                elif self.ship_status[ship.id] == 'mining':
                     command_queue.append(self.mine_halite(ship))
-                
-                elif self.ship_types[ship.id] == 'attacker':
-                    command_queue.append(self.attack(ship))
-            
-            # Check if we should build a new ship
-            if ( len(ships) <= game.game_map.height and
-                self.me.halite_amount >= constants.SHIP_COST and
-                self.game_map[self.me.shipyard].occupied_by != self.me.id and
-                not self.game_map[self.me.shipyard].is_occupied and turns_left > 50):
 
+            # Check if we should build a new ship
+            if ( len(ships) <= (len(dropoffs)+1)*8 and
+                self.me.halite_amount >= constants.SHIP_COST and
+                self.game_map[self.me.shipyard.position].occupied_by != self.me.id and
+                not self.game_map[self.me.shipyard.position].is_occupied and turns_left > 50 and
+                self.building_dropoff == False):
+                
                 command_queue.append(self.me.shipyard.spawn())
+                logging.info('Building a new ship')
+
             
             logging.debug('command_queue:\n {}\n\n'.format(command_queue))
-            logging.debug('waiting: {}'.format(self.waiting))
             game.end_turn(command_queue)
 
-    def return_halite(self, ship):
+
+    def return_halite(self, ship, dropoffs):
         """ Method with logic for turning in halite"""
         logging.debug('***Returning***')
         move = Direction.Still
-        
-        # Find the way to the dropoff
-        for direction in self.game_map.get_unsafe_moves(ship.position, self.me.shipyard.position):
-            target_pos = ship.position.directional_offset(direction)
-        if not self.game_map[target_pos].occupied_by == self.me.id:
-            move = direction
-        
-        
-        next_position = ship.position.directional_offset(move)
-        self.game_map[next_position].mark_unsafe(ship)
+        closest_dropoff = self.closest_dropoff(ship, dropoffs)
+        move = self.game_map.naive_navigate(ship, closest_dropoff)
+
         return ship.move(move)
 
     def mine_halite(self, ship):
@@ -112,7 +133,7 @@ class KuBot():
         move = None
         
         # Check if we should stay put and mine.
-        if self.game_map[ship.position].halite_amount > constants.MAX_HALITE/10:
+        if self.game_map[ship.position].halite_amount > constants.MAX_HALITE/75:
             logging.debug('Mining at:{} with Halite:{}'.format(ship.position, self.game_map[ship.position].halite_amount))
             move = Direction.Still
             self.game_map[ship.position].mark_unsafe(ship)
@@ -121,10 +142,10 @@ class KuBot():
         else:
             for cardinal in ship.position.get_surrounding_cardinals():
                 logging.debug('Cardinal: {} - Halite: {}'.format(cardinal, self.game_map[cardinal].halite_amount))
-                if not self.game_map[cardinal].is_occupied and self.game_map[cardinal].halite_amount > constants.MAX_HALITE/10:
+                if not self.game_map[cardinal].is_occupied and self.game_map[cardinal].halite_amount > constants.MAX_HALITE/75:
                     possible_moves.append(cardinal)
                     
-            # Move towards a random candidate
+            # Move towards the best candidate
             if len(possible_moves) > 0:
                 max_halite = 0
                 for m in possible_moves:
@@ -136,43 +157,45 @@ class KuBot():
            
             # If no mineable cell was found, move to a random cell. 
             if move == None:
-                for cardinal in ship.position.get_surrounding_cardinals():
-                    if not self.game_map[cardinal].is_occupied:
-                        possible_moves.append(self.game_map.naive_navigate(ship, cardinal))
-                    
-                # Move towards a random candidate
-                if len(possible_moves) > 0:
-                    move = random.choice(possible_moves)
-                    logging.debug('No halite found, moving to: {}'.format(move))
-                        
+                possible_moves = []
+                size = 10
+                for y in range(-1*size, size+1):
+                    for x in range(-1*size, size+1):
+                        test_position = ship.position + Position(x,y)
+                        if self.game_map[test_position].halite_amount > constants.MAX_HALITE/75:
+                            possible_moves.append(test_position)
+                if len(possible_moves)>0:
+                    move = self.game_map.naive_navigate(ship, random.choice(possible_moves))
+                
             # If no move has been found, wait.
             if move == None:
+                logging.info('No move found, waiting')
                 move = Direction.Still
         next_position = ship.position.directional_offset(move)
         self.game_map[next_position].mark_unsafe(ship)
         logging.debug('next position {}'.format(next_position))
         return ship.move(move)
 
-    def attack(self, ship):
-        """ Method for attacking the enemy"""
-        logging.debug('***Attack***')
-        move = Direction.Still
-        
-        # Find an enemy player
-        for player in self.players:
-            if player == self.me.id:
-                continue
-            
-            enemy_shipyard = self.players[player].shipyard.position
-            # Find a way towards the enemy shipyard without colliding with a friendly.
-            for direction in self.game_map.get_unsafe_moves(ship.position, enemy_shipyard):
-                target_pos = ship.position.directional_offset(direction)
-                if not self.game_map[target_pos].occupied_by == self.me.id:
-                    move = direction                    
-            
-            next_position = ship.position.directional_offset(move)
-            self.game_map[next_position].mark_unsafe(ship)
-            return ship.move(move)
+    def closest_dropoff(self, ship, dropoffs):
+        shortest_distance = self.game_map.calculate_distance(ship.position, self.me.shipyard.position)
+        closest_dropoff = self.me.shipyard.position
+        for dropoff in dropoffs:
+            distance_to_dropoff = self.game_map.calculate_distance(ship.position, dropoff.position)
+            if distance_to_dropoff <= shortest_distance:
+                shortest_distance = distance_to_dropoff
+                closest_dropoff = dropoff.position
+        return closest_dropoff
+    
+    def furthest_dropoff(self, ship, dropoffs):
+        longest_distance = self.game_map.calculate_distance(ship.position, self.me.shipyard.position)
+        furthest_dropoff = self.me.shipyard.position
+        for dropoff in dropoffs:
+            distance_to_dropoff = self.game_map.calculate_distance(ship.position, dropoff.position)
+            if distance_to_dropoff >= longest_distance:
+                longest_distance = distance_to_dropoff
+                furthest_dropoff = dropoff.position
+        return furthest_dropoff
+
 
 if __name__ == '__main__':
     # --- Calculation heavy code below ---

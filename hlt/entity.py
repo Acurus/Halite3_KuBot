@@ -3,6 +3,7 @@ import abc
 from . import commands, constants
 from .positionals import Direction, Position
 from .common import read_input
+import logging
 
 
 class Entity(abc.ABC):
